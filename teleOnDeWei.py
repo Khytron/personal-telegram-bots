@@ -18,6 +18,10 @@ customers = {}
 active_customers = {}
 replied_to = set() # Track who we already said "Ok" to
 
+# --- SESSION DATA ---
+session_total_profit = 0
+session_total_delivery = 0
+
 # --- TRACKING FILTER ---
 tracking_filter = None
 
@@ -44,13 +48,15 @@ client = TelegramClient('my_safe_userbot', api_id, api_hash, loop=loop)
 # ---------------------------------------------------------
 # This listens for messages YOU send (outgoing=True) anywhere.
 # Best practice: Send these to your "Saved Messages".
-@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active)( .+)?$'))
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active|finish)( .+)?$'))
 async def control_handler(event):
     global bot_active
     global tracking_filter
     global active_customers
     global customers
     global replied_to
+    global session_total_profit
+    global session_total_delivery
 
     # Split command from arguments (e.g., ".track burger" -> "burger")
     raw_text = event.raw_text.strip()
@@ -60,9 +66,6 @@ async def control_handler(event):
 
     if command == '.pause':
         bot_active = False
-        customers = {} 
-        active_customers = {}
-        replied_to.clear()
         # Edit your command message to confirm receipt
         await event.edit("⏸️ **PAUSED**: Auto-reply is now OFF.")
         print("--- [CONTROL] Bot Paused by User ---")
@@ -92,11 +95,20 @@ async def control_handler(event):
             print("--- [CONTROL] Track Command Used Without Keyword ---")
 
     elif command == '.done':
-        customers = {}
+        # Calculate profit, add to session total profit
+        for customer_id, customer_msg in active_customers.items():
+            if ("kk13" in customer_msg.lower()):
+                session_total_profit += 5 # Add RM5 to total profit
+            else:
+                session_total_profit += 4 # Add Rm4 to total profit
+
+            session_total_delivery += 1 # Increment total transactions
+        
+        customers = {} # Clear customers
         active_customers = {}  # Clear active customers
         replied_to.clear() # Clear reply tracking
         await event.edit("⏸️ **FINISHED**: Finished the delivery(s).")
-        print("--- [CONTROL] Active Customers cleared ---")
+        print("--- [CONTROL] Finished delivery(s) ---")
 
     elif command == '.active':
         if not event.is_reply:
@@ -123,6 +135,24 @@ async def control_handler(event):
         else:
             await event.edit("❌ No customer found with that text.")
             print("--- [CONTROL] .active: No match found ---")
+
+    elif command == '.finish':
+        await event.edit(f"--- SESSION STATS ---\nTotal Profit: RM{session_total_profit} ✅\nTotal Delivery: {session_total_delivery} ")
+        print("--------- SESSION STATS ----------")
+        print(f"Total Profit: RM{session_total_profit} ✅")
+        print(f"Total Delivery: {session_total_delivery} ")
+        bot_active = False
+
+    elif command == '.clear':
+        customers = {} # Clear customers
+        active_customers = {}  # Clear active customers
+        replied_to.clear() # Clear reply tracking
+
+        session_total_profit = 0
+        session_total_delivery = 0
+        
+        await event.edit("⏸️ **CLEARED**: Active customers cleared.")
+        print("--- [CONTROL] Active Customers cleared ---")
 
 
 
