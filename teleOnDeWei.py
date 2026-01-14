@@ -9,12 +9,14 @@ api_hash = '6dfbd3acbf7ef420fe2bac53b3406432' # Replace with your API Hash (stri
 # 2. Define the Target Group
 # You can use the group's username (e.g., 'groupusername') or ID.
 # To find an ID, you can forward a message from the group to a bot like @userinfobot.
-TARGET_GROUP = -1001869302435 #-5065987554
+TARGET_GROUP = -1001869302435 # (OnDeWei Group: -1001869302435, Test Group: -5065987554)
 
 # --- STATE TRACKING ---
 # We store the IDs of people we are currently "dealing with"
 # Dictionary to store {sender_id: original_group_message_object}
+customers = {}
 active_customers = {}
+replied_to = set() # Track who we already said "Ok" to
 
 # --- TRACKING FILTER ---
 tracking_filter = None
@@ -42,10 +44,13 @@ client = TelegramClient('my_safe_userbot', api_id, api_hash, loop=loop)
 # ---------------------------------------------------------
 # This listens for messages YOU send (outgoing=True) anywhere.
 # Best practice: Send these to your "Saved Messages".
-@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack)( .+)?$'))
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active)( .+)?$'))
 async def control_handler(event):
     global bot_active
     global tracking_filter
+    global active_customers
+    global customers
+    global replied_to
 
     # Split command from arguments (e.g., ".track burger" -> "burger")
     raw_text = event.raw_text.strip()
@@ -55,7 +60,9 @@ async def control_handler(event):
 
     if command == '.pause':
         bot_active = False
-        active_customers = {}  # Clear active customers when pausing
+        customers = {} 
+        active_customers = {}
+        replied_to.clear()
         # Edit your command message to confirm receipt
         await event.edit("⏸️ **PAUSED**: Auto-reply is now OFF.")
         print("--- [CONTROL] Bot Paused by User ---")
@@ -84,6 +91,40 @@ async def control_handler(event):
             await event.edit("⚠️ Please provide a keyword to track.    Usage: `.track <keyword>`")
             print("--- [CONTROL] Track Command Used Without Keyword ---")
 
+    elif command == '.done':
+        customers = {}
+        active_customers = {}  # Clear active customers
+        replied_to.clear() # Clear reply tracking
+        await event.edit("⏸️ **FINISHED**: Finished the delivery(s).")
+        print("--- [CONTROL] Active Customers cleared ---")
+
+    elif command == '.active':
+        if not event.is_reply:
+            await event.edit("⚠️ Reply to a message to check active status.")
+            return
+
+        # Get the message you replied to
+        reply_msg = await event.get_reply_message()
+        
+        # Get the string of the message
+        target_text = reply_msg.raw_text.strip()
+        
+        # Search for the sender_id in customers based on the text
+        found_id = None
+        for sender_id, stored_msg in customers.items():
+            if stored_msg.raw_text.strip() == target_text:
+                found_id = sender_id
+                break
+        
+        if found_id:
+            active_customers[found_id] = target_text
+            await event.edit(f"✅ Active Customer: `{found_id}`")
+            print(f"--- [CONTROL] Active customer: {found_id} ---")
+        else:
+            await event.edit("❌ No customer found with that text.")
+            print("--- [CONTROL] .active: No match found ---")
+
+
 
 
 # ---------------------------------------------------------
@@ -98,8 +139,8 @@ async def handler(event):
         return
     
     # 1. BUSY CHECK
-    # If we are already tracking someone, IGNORE new requests.
-    if len(active_customers) > 0:
+    # If im delivering to an active customer or if customer that im replying to is more than 2, IGNORE new requests.
+    if len(active_customers) > 0 or len(customers) > 2:
         print(f"⚠️ Busy with a customer. Ignoring request from {event.sender_id}")
         return
     
@@ -132,12 +173,12 @@ async def handler(event):
             
             # Add them to our "Watch List"
             # STORE THE MESSAGE OBJECT (so we can forward it later)
-            active_customers[sender_id] = event.message
+            customers[sender_id] = event.message
             
 
             # --- SAFETY MECHANISM: HUMAN DELAY ---
-            # Wait between 5 and 12 seconds before sending
-            wait_time = random.randint(5, 12)
+            # Wait between 4 and 7 seconds before sending
+            wait_time = random.randint(4, 7)
             print(f"   -> Waiting {wait_time} seconds to simulate human typing...")
             await asyncio.sleep(wait_time)
 
@@ -163,15 +204,16 @@ async def handler(event):
 @client.on(events.NewMessage(incoming=True))
 async def followup_handler(event):
     global bot_active
+    global replied_to
     
     # 1. Check if bot is on and message is Private
     if not bot_active: return
     if not event.is_private: return
 
-    # 2. IMPORTANT: Only reply if this person is in our "Active List"
-    # This prevents you from replying "Ok" to your friends/family
+    # 2. IMPORTANT: Only reply if this person is in our "Customer List"
+    # AND we haven't said "Ok" to them yet.
     sender_id = event.sender_id
-    if sender_id not in active_customers:
+    if sender_id not in customers or sender_id in replied_to:
         return
 
     # 3. Wait 5-8 seconds before replying to simulate human behavior
@@ -182,20 +224,23 @@ async def followup_handler(event):
     # 4. Reply "Ok"
     try:
         await event.reply("Ok")
+        replied_to.add(sender_id) # Mark as replied so we don't spam "Ok"
         print(f"   -> Replied 'Ok' to {sender_id}")
 
         # 5. FORWARDING LOGIC
         print(f"   -> Forwarding conversation to Saved Messages...")
 
         # A. Forward the Original Group Message (retrieved from memory)
-        original_msg = active_customers[sender_id]
+        original_msg = customers[sender_id]
         await client.forward_messages('me', original_msg)
 
         # B. Forward the Customer's Reply (the current event)
         await client.forward_messages('me', event.message)
         
-        # 6. Remove them from list so we don't say "Ok" forever
-        del active_customers[sender_id]
+        # 6. We do NOT remove them here anymore. 
+        # We wait for the user to type .active (to confirm order) or .done (to reset).
+        # del customers[sender_id] 
+
         
     except Exception as e:
         print(f"   -> Error replying Ok: {e}")
