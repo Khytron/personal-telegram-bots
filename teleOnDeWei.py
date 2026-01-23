@@ -1,6 +1,9 @@
 from telethon import TelegramClient, events
 import random
 import asyncio
+import csv
+import os
+from datetime import datetime
 
 # 1. Insert your details from my.telegram.org
 api_id = 33411117       # Replace with your API ID (integer)
@@ -142,6 +145,59 @@ async def control_handler(event):
         print("--------- SESSION STATS ----------")
         print(f"Total Profit: RM{session_total_profit} ✅")
         print(f"Total Delivery: {session_total_delivery} ")
+        
+        # --- CSV RECORDING LOGIC ---
+        csv_file = "OnDeWeiProfit.csv"
+        today_str = datetime.now().strftime("%d-%m-%y")
+        
+        # 1. Ensure file exists with header
+        if not os.path.exists(csv_file):
+            with open(csv_file, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Date", "Total_Profit", "Total_Transactions"])
+        
+        # 2. Read and Update Data
+        rows = []
+        date_found = False
+        
+        try:
+            with open(csv_file, "r", newline="") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                if header:
+                    rows.append(header)
+                else:
+                    rows.append(["Date", "Total_Profit", "Total_Transactions"])
+                
+                for row in reader:
+                    if row and row[0] == today_str:
+                        # Found today's record: Update it
+                        # row[1] is profit, row[2] is transactions
+                        current_saved_profit = int(row[1])
+                        current_saved_delivery = int(row[2])
+                        
+                        new_profit = current_saved_profit + session_total_profit
+                        new_delivery = current_saved_delivery + session_total_delivery
+                        
+                        rows.append([today_str, new_profit, new_delivery])
+                        date_found = True
+                    else:
+                        rows.append(row)
+            
+            # 3. If date not found, add new record
+            if not date_found:
+                rows.append([today_str, session_total_profit, session_total_delivery])
+                
+            # 4. Write back to file
+            with open(csv_file, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerows(rows)
+                
+            print(f"--- [SYSTEM] Saved session stats to {csv_file} ---")
+            
+        except Exception as e:
+            print(f"--- [ERROR] Could not save to CSV: {e} ---")
+
         bot_active = False
 
     elif command == '.clear':
