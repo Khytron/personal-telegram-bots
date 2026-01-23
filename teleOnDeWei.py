@@ -26,7 +26,7 @@ session_total_delivery = 0
 tracking_filter = None
 
 # --- UNWANTED REQUESTS FILTER ---
-unwanted_orders = []
+unwanted_requests = ["air", "ais", "ice", "tea"]
 
 # --- GLOBAL CONTROL SWITCH ---
 # True = Bot works normally. False = Bot ignores everything.
@@ -48,7 +48,7 @@ client = TelegramClient('my_safe_userbot', api_id, api_hash, loop=loop)
 # ---------------------------------------------------------
 # This listens for messages YOU send (outgoing=True) anywhere.
 # Best practice: Send these to your "Saved Messages".
-@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active|finish)( .+)?$'))
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active|finish|clear|help|avoid|reset_unwanted)( .+)?$'))
 async def control_handler(event):
     global bot_active
     global tracking_filter
@@ -57,6 +57,7 @@ async def control_handler(event):
     global replied_to
     global session_total_profit
     global session_total_delivery
+    global unwanted_requests
 
     # Split command from arguments (e.g., ".track burger" -> "burger")
     raw_text = event.raw_text.strip()
@@ -147,13 +148,51 @@ async def control_handler(event):
         customers = {} # Clear customers
         active_customers = {}  # Clear active customers
         replied_to.clear() # Clear reply tracking
-
-        session_total_profit = 0
-        session_total_delivery = 0
         
         await event.edit("⏸️ **CLEARED**: Active customers cleared.")
         print("--- [CONTROL] Active Customers cleared ---")
 
+    elif command == '.avoid':
+        if args:
+            unwanted_requests.append(args)
+            await event.edit(f"🎯 **UNWANTED REQUESTS ENABLED**: Not accepting orders containing: **'{args}'**")
+            print(f"--- [CONTROL] Unwanted Requests Set to '{args}' ---")
+        else:
+            await event.edit("⚠️ Please provide a keyword to use.    Usage: `.avoid <keyword>`")
+            print("--- [CONTROL] Avoid Command Used Without Keyword ---")
+    
+    elif command == '.reset_unwanted':
+        unwanted_requests = ["air", "ais", "ice", "tea"]
+        await event.edit(f"🎯 **UNWANTED REQUESTS RESET**: Resetting Unwanted Requests to ['air', 'ais', 'ice', 'tea']")
+        print(f"--- [CONTROL] Unwanted Requests are Reset ---")
+
+    elif command == '.help':
+        await event.edit(
+""".pause   : Pause the bot 
+.resume  : Resume the bot 
+.status  : Tells the status of the bot 
+.untrack : Clear tracking filter
+.track   : Filter what you want
+.done    : Finish the active delivery(s)
+.active  : Set a delivery to active
+.finish  : Finish the session
+.clear   : Clear the active customers
+.avoid   : Add upon unwanted requests
+.reset_unwanted : Reset unwanted requests""")
+        print(
+""" --- [CONTROL] Display all available commands ---
+.pause   : Pause the bot
+.resume  : Resume the bot
+.status  : Tells the status of the bot
+.untrack : Clear tracking filter
+.track   : Filter what you want
+.done    : Finish the active delivery(s)
+.active  : Set a delivery to active
+.finish  : Finish the session
+.clear   : Clear the active customers
+.avoid   : Add upon unwanted requests
+.reset_unwanted : Reset unwanted requests"""
+        )
 
 
 
@@ -170,7 +209,7 @@ async def handler(event):
     
     # 1. BUSY CHECK
     # If im delivering to an active customer or if customer that im replying to is more than 2, IGNORE new requests.
-    if len(active_customers) > 0 or len(customers) > 2:
+    if len(active_customers) > 0 or len(customers) >= 2:
         print(f"⚠️ Busy with a customer. Ignoring request from {event.sender_id}")
         return
     
@@ -192,7 +231,30 @@ async def handler(event):
                  return
         
         # Filter unwanted requests
+        if len(unwanted_requests) > 0:
+            for unwanted in unwanted_requests:
+                if unwanted.lower() in text.lower():
+                    print(f"Filtered out a request containing '{unwanted}'. No PM sent.")
+                    return
+                
+        # Filter requests that are too long
+        dash_count = text.count('-')
+        no_space_text = text.replace(" ", "")
+        too_long = False
+
+        if (dash_count > 3):
+            too_long = True
+        elif ("-3" in no_space_text or "-4" in no_space_text or "-5" in no_space_text):
+            too_long = True
+        elif ("-2" in no_space_text and dash_count == 3):
+            too_long = True
+
+        if (too_long):
+            print("Filtered out a request that is too long. No PM sent.")
+            return
+
         
+        # If all filter is passed, proceed to send PM
 
         try:
             sender = await event.get_sender()
@@ -207,15 +269,15 @@ async def handler(event):
             
 
             # --- SAFETY MECHANISM: HUMAN DELAY ---
-            # Wait between 4 and 7 seconds before sending
-            wait_time = random.randint(4, 7)
+            # Wait between 3 and 4 seconds before sending
+            wait_time = random.randint(3, 4)
             print(f"   -> Waiting {wait_time} seconds to simulate human typing...")
             await asyncio.sleep(wait_time)
 
             # 3. Send the PRIVATE message
 
-            # If there is KK9 or KK13 in the message, raise the price
-            if "kk9" in text.lower() or "kk13" in text.lower():
+            # If there is KK13 or ipgkkbm in the message, raise the price
+            if "kk13" in text.lower() or "ipgkkbm" in text.lower():
                 await client.send_message(sender_id, "Rm5?")
             else:
                 # We use client.send_message instead of event.reply
@@ -246,16 +308,21 @@ async def followup_handler(event):
     if sender_id not in customers or sender_id in replied_to:
         return
 
-    # 3. Wait 5-8 seconds before replying to simulate human behavior
-    wait_time = random.randint(5, 8)
+    # 3. Wait 3-5 seconds before replying to simulate human behavior
+    wait_time = random.randint(3, 5)
     print(f"   -> Customer {sender_id} replied. Waiting {wait_time}s to say 'Ok'...")
     await asyncio.sleep(wait_time)
 
-    # 4. Reply "Ok"
+    # 4. Reply "Ok" or "rm4 sorry"
     try:
-        await event.reply("Ok")
+        if "3" in event.raw_text:
+            await event.reply("rm4 sorry")
+            print(f"   -> Replied 'rm4 sorry' to {sender_id}")
+        else:
+            await event.reply("Ok")
+            print(f"   -> Replied 'Ok' to {sender_id}")
+            
         replied_to.add(sender_id) # Mark as replied so we don't spam "Ok"
-        print(f"   -> Replied 'Ok' to {sender_id}")
 
         # 5. FORWARDING LOGIC
         print(f"   -> Forwarding conversation to Saved Messages...")
