@@ -20,6 +20,7 @@ TARGET_GROUP = -1001869302435 # (OnDeWei Group: -1001869302435, Test Group: -506
 customers = {}
 active_customers = {}
 replied_to = set() # Track who we already said "Ok" to
+current_session_cafe = None # Track the cafe of the first accepted customer
 
 # --- SESSION DATA ---
 session_total_profit = 0
@@ -41,6 +42,9 @@ PRIVATE_RESPONSE = "Rm4?"
 # 4. Force create a new event loop
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
+
+# 5. Lock for concurrency safety
+processing_lock = asyncio.Lock()
 # ---------------------------
 
 # Create the client (this will ask you to login via terminal the first time)
@@ -61,6 +65,7 @@ async def control_handler(event):
     global session_total_profit
     global session_total_delivery
     global unwanted_requests
+    global current_session_cafe
 
     # Split command from arguments (e.g., ".track burger" -> "burger")
     raw_text = event.raw_text.strip()
@@ -111,6 +116,7 @@ async def control_handler(event):
         customers = {} # Clear customers
         active_customers = {}  # Clear active customers
         replied_to.clear() # Clear reply tracking
+        current_session_cafe = None
         await event.edit("⏸️ **FINISHED**: Finished the delivery(s).")
         print("--- [CONTROL] Finished delivery(s) ---")
 
@@ -142,7 +148,7 @@ async def control_handler(event):
 
     elif command == '.finish':
         await event.edit(f"--- SESSION STATS ---\nTotal Profit: RM{session_total_profit} ✅\nTotal Delivery: {session_total_delivery} ")
-        print("--------- SESSION STATS ----------")
+        print("--- [CONTROL] Finished a session ---")
         print(f"Total Profit: RM{session_total_profit} ✅")
         print(f"Total Delivery: {session_total_delivery} ")
         
@@ -198,12 +204,14 @@ async def control_handler(event):
         except Exception as e:
             print(f"--- [ERROR] Could not save to CSV: {e} ---")
 
+        current_session_cafe = None
         bot_active = False
 
     elif command == '.clear':
         customers = {} # Clear customers
         active_customers = {}  # Clear active customers
         replied_to.clear() # Clear reply tracking
+        current_session_cafe = None
         
         await event.edit("⏸️ **CLEARED**: Active customers cleared.")
         print("--- [CONTROL] Active Customers cleared ---")
@@ -235,20 +243,7 @@ async def control_handler(event):
 .clear   : Clear the active customers
 .avoid   : Add upon unwanted requests
 .reset_unwanted : Reset unwanted requests""")
-        print(
-""" --- [CONTROL] Display all available commands ---
-.pause   : Pause the bot
-.resume  : Resume the bot
-.status  : Tells the status of the bot
-.untrack : Clear tracking filter
-.track   : Filter what you want
-.done    : Finish the active delivery(s)
-.active  : Set a delivery to active
-.finish  : Finish the session
-.clear   : Clear the active customers
-.avoid   : Add upon unwanted requests
-.reset_unwanted : Reset unwanted requests"""
-        )
+        print(" --- [CONTROL] Display all available commands ---")
 
 
 
@@ -258,14 +253,16 @@ async def control_handler(event):
 @client.on(events.NewMessage(chats=TARGET_GROUP))
 async def handler(event):
     global bot_active
+    global current_session_cafe
     
     # IMMEDIATE STOP if paused
     if not bot_active:
         return
     
     # 1. BUSY CHECK
-    # If im delivering to an active customer or if customer that im replying to is more than 2, IGNORE new requests.
-    if len(active_customers) > 0 or len(customers) >= 2:
+    # Check total people (Active + Pending). If >= 2, we are full.
+    total_people = len(customers)
+    if total_people >= 2:
         print(f"⚠️ Busy with a customer. Ignoring request from {event.sender_id}")
         return
     
@@ -309,24 +306,67 @@ async def handler(event):
             print("Filtered out a request that is too long. No PM sent.")
             return
 
+        # --- CAFE MATCHING LOGIC ---
+        # 1. Extract Cafe Name (simple parsing)
+        # We look for "cafe:" OR "kafe:" and take the line
+        extracted_cafe = None
+        clean_text = text.lower().replace(" ", "")
         
-        # If all filter is passed, proceed to send PM
-
-        try:
-            sender = await event.get_sender()
-            sender_id = sender.id
+        target_keyword = None
+        if "cafe:" in clean_text:
+            target_keyword = "cafe:"
+        elif "kafe:" in clean_text:
+            target_keyword = "kafe:"
             
-            print(f"Trigger received from {sender_id}. Sending PM...")
+        if target_keyword:
+            try:
+                # "ordertemplate...cafe:kk12\norder..." -> "kk12"
+                part_after_cafe = clean_text.split(target_keyword)[1]
+                extracted_cafe = part_after_cafe.split("\n")[0].strip()
+            except:
+                extracted_cafe = None
 
+
+        # We lock here to prevent race conditions
+        sender_id = event.sender_id
+        
+        async with processing_lock:
+            # 1. BUSY CHECK (Re-check inside lock)
+            total_people = len(customers)
+            if total_people >= 2:
+                print(f"⚠️ Busy with a customer. Ignoring request from {sender_id}")
+                return
             
+            # 2. Decision Logic
+
+            # If customer is first (Total=0) Set the cafe
+            if total_people == 0:
+                current_session_cafe = extracted_cafe
+                print(f"--- [LOGIC] First customer set Cafe to: {current_session_cafe} ---")
+
+            # If customer is second (total=1) check if cafe match with customer 1
+            elif total_people == 1:
+                if not extracted_cafe or not current_session_cafe:
+                    print(f"--- [LOGIC] Filtered! Cafe '{extracted_cafe}' does not match '{current_session_cafe}' ---")
+                    return
+                elif (extracted_cafe not in current_session_cafe) and (current_session_cafe not in extracted_cafe):
+                    print(f"--- [LOGIC] Filtered! Cafe '{extracted_cafe}' does not match '{current_session_cafe}' ---")
+                    return
+                else:
+                    print(f"--- [LOGIC] Match! Cafe '{extracted_cafe}' matches '{current_session_cafe}' ---")
+            
+
             # Add them to our "Watch List"
             # STORE THE MESSAGE OBJECT (so we can forward it later)
             customers[sender_id] = event.message
-            
+            print(f"Trigger received from {sender_id}. Sending PM...")
 
+        # If all filter is passed, proceed to send PM
+
+        try:
             # --- SAFETY MECHANISM: HUMAN DELAY ---
-            # Wait between 3 and 4 seconds before sending
-            wait_time = random.randint(3, 4)
+            # Wait 2-4 seconds before sending
+            wait_time = random.randint(2,3)
             print(f"   -> Waiting {wait_time} seconds to simulate human typing...")
             await asyncio.sleep(wait_time)
 
