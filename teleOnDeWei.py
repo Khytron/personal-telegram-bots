@@ -21,6 +21,8 @@ customers = {}
 active_customers = {}
 replied_to = set() # Track who we already said "Ok" to
 current_session_cafe = None # Track the cafe of the first accepted customer
+accept3 = False
+anycafe = False
 
 # --- SESSION DATA ---
 session_total_profit = 0
@@ -30,7 +32,7 @@ session_total_delivery = 0
 tracking_filter = None
 
 # --- UNWANTED REQUESTS FILTER ---
-unwanted_requests = ["air", "ais", "ice", "tea"]
+unwanted_requests = [" air", " ais", " ice", " tea"]
 
 # --- PLACES OUTSIDE UM ---
 places_outside_um = ["kk13", "ipgkkbm", "vista", "kerinchi"]
@@ -58,7 +60,7 @@ client = TelegramClient('my_safe_userbot', api_id, api_hash, loop=loop)
 # ---------------------------------------------------------
 # This listens for messages YOU send (outgoing=True) anywhere.
 # Best practice: Send these to your "Saved Messages".
-@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active|finish|clear|help|avoid|reset_unwanted|clear_customer|info|setprice)( .+)?$'))
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active|finish|clear|help|avoid|unavoid|clearc|info|setprice|accept3|anycafe|trackcafe)( .+)?$'))
 async def control_handler(event):
     global bot_active
     global tracking_filter
@@ -70,6 +72,8 @@ async def control_handler(event):
     global unwanted_requests
     global current_session_cafe
     global PRIVATE_RESPONSE
+    global accept3
+    global anycafe
 
     # Split command from arguments (e.g., ".track burger" -> "burger")
     raw_text = event.raw_text.strip()
@@ -108,19 +112,36 @@ async def control_handler(event):
             print("--- [CONTROL] Track Command Used Without Keyword ---")
 
     elif command == '.done':
-        # Calculate profit, add to session total profit
-        for customer_id, customer_msg in active_customers.items():
-            if ("kk13" in customer_msg.lower()):
-                session_total_profit += 5 # Add RM5 to total profit
-            else:
-                session_total_profit += 4 # Add Rm4 to total profit
+        if len(active_customers) == 0:
+            await event.edit("⚠️ No active customers to finish.")
+            return
 
-            session_total_delivery += 1 # Increment total transactions
+        # Calculate profit, add to session total profit
+        # And clean up specific IDs from the main lists
+        for customer_id, customer_msg in active_customers.items():
+            # 1. Profit Calc
+            if ("kk13" in customer_msg.lower()):
+                session_total_profit += 5 
+            else:
+                session_total_profit += 4 
+
+            session_total_delivery += 1
+            
+            # 2. Cleanup from Main Lists
+            if customer_id in customers:
+                del customers[customer_id]
+            
+            if customer_id in replied_to:
+                replied_to.remove(customer_id)
         
-        customers = {} # Clear customers
-        active_customers = {}  # Clear active customers
-        replied_to.clear() # Clear reply tracking
-        current_session_cafe = None
+        # 3. Clear Active List
+        active_customers = {} 
+        
+        # 4. Cafe Reset Decision
+        # If everyone is gone, reset cafe. If someone remains, keep cafe.
+        if len(customers) == 0:
+            current_session_cafe = None
+
         await event.edit("⏸️ **FINISHED**: Finished the delivery(s).")
         print("--- [CONTROL] Finished delivery(s) ---")
 
@@ -209,7 +230,9 @@ async def control_handler(event):
             print(f"--- [ERROR] Could not save to CSV: {e} ---")
 
         current_session_cafe = None
-        bot_active = False
+        # Graceful shutdown
+        print("--- [SYSTEM] Shutting down bot... ---")
+        await client.disconnect()
 
     elif command == '.clear':
         customers = {} # Clear customers
@@ -229,12 +252,12 @@ async def control_handler(event):
             await event.edit("⚠️ Please provide a keyword to use.    Usage: `.avoid <keyword>`")
             print("--- [CONTROL] Avoid Command Used Without Keyword ---")
     
-    elif command == '.reset_unwanted':
-        unwanted_requests = ["air", "ais", "ice", "tea"]
-        await event.edit(f"🎯 **UNWANTED REQUESTS RESET**: Resetting Unwanted Requests to ['air', 'ais', 'ice', 'tea']")
+    elif command == '.unavoid':
+        unwanted_requests = [" air", " ais", " ice", " tea"]
+        await event.edit(f"🎯 **UNWANTED REQUESTS RESET**: Resetting Unwanted Requests to [' air', ' ais', ' ice', ' tea']")
         print(f"--- [CONTROL] Unwanted Requests are Reset ---")
 
-    elif command == '.clear_customer':
+    elif command == '.clearc':
         if not event.is_reply:
             await event.edit("⚠️ Reply to a customer's order template to clear them")
             return
@@ -268,14 +291,17 @@ async def control_handler(event):
             print(f"--- [CONTROL] Cleared customer: {found_id} ---")
         else:
             await event.edit("❌ No customer found with that text.")
-            print("--- [CONTROL] .clear_customer : No match found ---")
+            print("--- [CONTROL] .clearc : No match found ---")
 
     elif command == '.info':
         info_text = f"""📊 **SESSION INFO**
-🏠 **Current Cafe:** `{current_session_cafe}`
+☕ **Current Cafe:** `{current_session_cafe}`
 👥 **Pending:** {len(customers)} | **Active:** {len(active_customers)}
 💰 **Session Profit:** RM{session_total_profit}
-🏍️ **Deliveries:** {session_total_delivery}"""
+🏍️ **Deliveries:** {session_total_delivery}
+✅ **Tracking:** {tracking_filter}
+❎ **Avoiding:** {unwanted_requests}
+3️⃣ **Accepting Rm3:** {accept3}"""
         await event.edit(info_text)
         print("--- [CONTROL] Info Displayed ---")
 
@@ -288,6 +314,36 @@ async def control_handler(event):
             await event.edit(f"⚠️ Current price: **'{PRIVATE_RESPONSE}'**. Usage: `.setprice <new_response>`")
             print("--- [CONTROL] Setprice used without arguments ---")
 
+    elif command == '.accept3':
+        accept3 = not accept3
+        if accept3:
+            await event.edit("💰 **ACCEPTING RM3**: Now accepting RM3 orders")
+        else:
+            await event.edit("💰 **NOT ACCEPTING RM3**: Now rejecting RM3 orders")
+        print(f"--- [CONTROL] Set accept3 to '{accept3}' ---")
+
+    elif command == '.anycafe':
+        anycafe = not anycafe
+        if anycafe:
+            current_session_cafe = "ANY"
+            await event.edit("🌍 **ANY CAFE MODE**: ON (Accepting mixed orders)")
+        else:
+            current_session_cafe = None
+            await event.edit("🏠 **ANY CAFE MODE**: OFF (Strict matching)")
+        print(f"--- [CONTROL] Set anycafe to '{anycafe}' ---")
+
+    elif command == '.trackcafe':
+        if args:
+            if args.lower() == "none":
+                current_session_cafe = None
+                await event.edit("🏠 **TRACK CAFE RESET**: Now accepting first come first served.")
+            else:
+                current_session_cafe = args.lower().replace(" ", "")
+                await event.edit(f"🏠 **TRACK CAFE SET**: Only accepting orders matching: **'{current_session_cafe}'**")
+            print(f"--- [CONTROL] Track Cafe Set to '{current_session_cafe}' ---")
+        else:
+            await event.edit("⚠️ Usage: `.trackcafe <kk11/kk5>` or `.trackcafe None`")
+
     elif command == '.help':
         await event.edit(
 """.help : Display all available commands
@@ -297,14 +353,17 @@ async def control_handler(event):
 .status  : Tells the status of the bot 
 .untrack : Clear tracking filter
 .track   : Filter what you want
-.done    : Finish the active delivery(s)
+.done    : Complete the active delivery(s)
 .active  : Set a delivery to active
 .finish  : Finish the session
 .avoid   : Add upon unwanted requests
+.unavoid : Reset unwanted requests
 .clear   : Clear the active customers
 .setprice : Change the PM message
-.clear_customer : Clear a specific customer
-.reset_unwanted : Reset unwanted requests""")
+.clearc : Clear a specific customer
+.accept3 : Toggle accepting rm3 orders
+.anycafe : Toggle any cafe mode
+.trackcafe : Manually set allowed cafe(s)""")
         print(" --- [CONTROL] Display all available commands ---")
 
 
@@ -317,6 +376,7 @@ async def handler(event):
     global bot_active
     global current_session_cafe
     global places_outside_um
+    global anycafe
     
     # IMMEDIATE STOP if paused
     if not bot_active:
@@ -404,12 +464,18 @@ async def handler(event):
 
             # If customer is first (Total=0) Set the cafe
             if total_people == 0:
-                current_session_cafe = extracted_cafe
-                print(f"--- [LOGIC] First customer set Cafe to: {current_session_cafe} ---")
+                if anycafe:
+                    current_session_cafe = "ANY"
+                    print(f"--- [LOGIC] First customer. Any Cafe Mode: ON. Set to ANY ---")
+                else:
+                    current_session_cafe = extracted_cafe
+                    print(f"--- [LOGIC] First customer set Cafe to: {current_session_cafe} ---")
 
             # If customer is second (total=1) check if cafe match with customer 1
             elif total_people == 1:
-                if not extracted_cafe or not current_session_cafe:
+                if anycafe:
+                     print(f"--- [LOGIC] Match! Any Cafe Mode: ON ---")
+                elif not extracted_cafe or not current_session_cafe:
                     print(f"--- [LOGIC] Filtered! Cafe '{extracted_cafe}' does not match '{current_session_cafe}' ---")
                     return
                 elif (extracted_cafe not in current_session_cafe) and (current_session_cafe not in extracted_cafe):
@@ -431,8 +497,8 @@ async def handler(event):
             await event.get_sender()
 
             # --- SAFETY MECHANISM: HUMAN DELAY ---
-            # Wait 3 seconds before sending
-            wait_time = 3
+            # Wait 2-3 seconds before sending
+            wait_time = random.randint(2, 3)
             print(f"   -> Waiting {wait_time} seconds to simulate human typing...")
             await asyncio.sleep(wait_time)
 
@@ -460,6 +526,7 @@ async def handler(event):
 async def followup_handler(event):
     global bot_active
     global replied_to
+    global accept3
     
     # 1. Check if bot is on and message is Private
     if not bot_active: return
@@ -478,7 +545,7 @@ async def followup_handler(event):
 
     # 4. Reply "Ok" or "rm4 sorry"
     try:
-        if "3" in event.raw_text:
+        if "3" in event.raw_text and not accept3:
             await event.reply("rm4 sorry")
             print(f"   -> Replied 'rm4 sorry' to {sender_id}")
         else:
