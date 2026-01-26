@@ -1,3 +1,4 @@
 *.session
 OnDeWeiProfit.csv
+.gemini-clipboard
 __pycache__/

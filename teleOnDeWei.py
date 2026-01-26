@@ -32,6 +32,9 @@ tracking_filter = None
 # --- UNWANTED REQUESTS FILTER ---
 unwanted_requests = ["air", "ais", "ice", "tea"]
 
+# --- PLACES OUTSIDE UM ---
+places_outside_um = ["kk13", "ipgkkbm", "vista", "kerinchi"]
+
 # --- GLOBAL CONTROL SWITCH ---
 # True = Bot works normally. False = Bot ignores everything.
 bot_active = True
@@ -55,7 +58,7 @@ client = TelegramClient('my_safe_userbot', api_id, api_hash, loop=loop)
 # ---------------------------------------------------------
 # This listens for messages YOU send (outgoing=True) anywhere.
 # Best practice: Send these to your "Saved Messages".
-@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active|finish|clear|help|avoid|reset_unwanted)( .+)?$'))
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|done|active|finish|clear|help|avoid|reset_unwanted|clear_customer|info|setprice)( .+)?$'))
 async def control_handler(event):
     global bot_active
     global tracking_filter
@@ -66,6 +69,7 @@ async def control_handler(event):
     global session_total_delivery
     global unwanted_requests
     global current_session_cafe
+    global PRIVATE_RESPONSE
 
     # Split command from arguments (e.g., ".track burger" -> "burger")
     raw_text = event.raw_text.strip()
@@ -160,7 +164,7 @@ async def control_handler(event):
         if not os.path.exists(csv_file):
             with open(csv_file, "w", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(["Date", "Total_Profit", "Total_Transactions"])
+                writer.writerow(["Date", "Total_Profit", "Total_Delivery"])
         
         # 2. Read and Update Data
         rows = []
@@ -173,7 +177,7 @@ async def control_handler(event):
                 if header:
                     rows.append(header)
                 else:
-                    rows.append(["Date", "Total_Profit", "Total_Transactions"])
+                    rows.append(["Date", "Total_Profit", "Total_Delivery"])
                 
                 for row in reader:
                     if row and row[0] == today_str:
@@ -230,9 +234,65 @@ async def control_handler(event):
         await event.edit(f"🎯 **UNWANTED REQUESTS RESET**: Resetting Unwanted Requests to ['air', 'ais', 'ice', 'tea']")
         print(f"--- [CONTROL] Unwanted Requests are Reset ---")
 
+    elif command == '.clear_customer':
+        if not event.is_reply:
+            await event.edit("⚠️ Reply to a customer's order template to clear them")
+            return
+        
+        # Get the message you replied to
+        reply_msg = await event.get_reply_message()
+        
+        # Get the string of the message
+        target_text = reply_msg.raw_text.strip()
+        
+        # Search for the sender_id in customers based on the text
+        found_id = None
+        for sender_id, stored_msg in customers.items():
+            if stored_msg.raw_text.strip() == target_text:
+                found_id = sender_id
+                break
+
+        if found_id:
+            del customers[found_id] 
+            
+            if len(customers) == 0:
+                current_session_cafe = None
+
+            if found_id in active_customers.keys():
+                del active_customers[found_id]
+
+            if found_id in replied_to:
+                replied_to.remove(found_id)
+
+            await event.edit(f"✅ Cleared Customer `{found_id}`")
+            print(f"--- [CONTROL] Cleared customer: {found_id} ---")
+        else:
+            await event.edit("❌ No customer found with that text.")
+            print("--- [CONTROL] .clear_customer : No match found ---")
+
+    elif command == '.info':
+        info_text = f"""📊 **SESSION INFO**
+🏠 **Current Cafe:** `{current_session_cafe}`
+👥 **Pending:** {len(customers)} | **Active:** {len(active_customers)}
+💰 **Session Profit:** RM{session_total_profit}
+🏍️ **Deliveries:** {session_total_delivery}"""
+        await event.edit(info_text)
+        print("--- [CONTROL] Info Displayed ---")
+
+    elif command == '.setprice':
+        if args:
+            PRIVATE_RESPONSE = args.strip()
+            await event.edit(f"💰 **PRICE UPDATED**: New response is: **'{PRIVATE_RESPONSE}'**")
+            print(f"--- [CONTROL] Private Response Set to '{PRIVATE_RESPONSE}' ---")
+        else:
+            await event.edit(f"⚠️ Current price: **'{PRIVATE_RESPONSE}'**. Usage: `.setprice <new_response>`")
+            print("--- [CONTROL] Setprice used without arguments ---")
+
     elif command == '.help':
         await event.edit(
-""".pause   : Pause the bot 
+""".help : Display all available commands
+.info    : Show session summary
+.pause   : Pause the bot 
 .resume  : Resume the bot 
 .status  : Tells the status of the bot 
 .untrack : Clear tracking filter
@@ -240,8 +300,10 @@ async def control_handler(event):
 .done    : Finish the active delivery(s)
 .active  : Set a delivery to active
 .finish  : Finish the session
-.clear   : Clear the active customers
 .avoid   : Add upon unwanted requests
+.clear   : Clear the active customers
+.setprice : Change the PM message
+.clear_customer : Clear a specific customer
 .reset_unwanted : Reset unwanted requests""")
         print(" --- [CONTROL] Display all available commands ---")
 
@@ -254,6 +316,7 @@ async def control_handler(event):
 async def handler(event):
     global bot_active
     global current_session_cafe
+    global places_outside_um
     
     # IMMEDIATE STOP if paused
     if not bot_active:
@@ -364,19 +427,23 @@ async def handler(event):
         # If all filter is passed, proceed to send PM
 
         try:
+            # Ensure we have the entity for sending
+            await event.get_sender()
+
             # --- SAFETY MECHANISM: HUMAN DELAY ---
-            # Wait 2-4 seconds before sending
-            wait_time = random.randint(2,3)
+            # Wait 3 seconds before sending
+            wait_time = 3
             print(f"   -> Waiting {wait_time} seconds to simulate human typing...")
             await asyncio.sleep(wait_time)
 
             # 3. Send the PRIVATE message
 
-            # If there is KK13 or ipgkkbm in the message, raise the price
-            if "kk13" in text.lower() or "ipgkkbm" in text.lower():
+            # If message is requesting outside um, raise the price
+            inside_um = all(x not in text.lower() for x in places_outside_um)
+
+            if not inside_um:
                 await client.send_message(sender_id, "Rm5?")
             else:
-                # We use client.send_message instead of event.reply
                 await client.send_message(sender_id, PRIVATE_RESPONSE)
 
             
