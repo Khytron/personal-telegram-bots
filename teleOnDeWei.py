@@ -32,7 +32,8 @@ session_total_delivery = 0
 tracking_filter = None
 
 # --- UNWANTED REQUESTS FILTER ---
-unwanted_requests = [" air", " ais", " ice", " tea", " sup", " soup"]
+default_unwanted_requests = [" air", " ais", " ice", " tea", " sup", " soup", "extrajos", "vista", "seksyen", " pj", " lrt", " ktm"]
+unwanted_requests = default_unwanted_requests
 
 # --- PLACES OUTSIDE UM ---
 places_outside_um = ["kk13", "ipgkkbm", "vista", "kerinchi"]
@@ -94,7 +95,7 @@ async def group_cleanup_handler(event):
 
 # 2. Command Handler: Listen for messages YOU send (outgoing=True) anywhere.
 # Best practice: Send these to your "Saved Messages".
-@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|terminate|act|fin|clear|help|avoid|unavoid|clearc|info|setprice|accept3|anycafe|trackcafe)( .+)?$'))
+@client.on(events.NewMessage(outgoing=True, pattern=r'^\.(pause|resume|status|track|untrack|terminate|act|fin|clear|help|avoid|unavoid|clearc|info|setprice|accept3|anycafe|trackcafe|addprofit)( .+)?$'))
 async def control_handler(event):
     global bot_active
     global tracking_filter
@@ -288,8 +289,8 @@ async def control_handler(event):
             print("--- [CONTROL] Avoid Command Used Without Keyword ---")
     
     elif command == '.unavoid':
-        unwanted_requests = [" air", " ais", " ice", " tea", " sup", " soup"]
-        await event.edit(f"🎯 **UNWANTED REQUESTS RESET**: Resetting Unwanted Requests to [' air', ' ais', ' ice', ' tea']")
+        unwanted_requests = default_unwanted_requests
+        await event.edit(f"🎯 **UNWANTED REQUESTS RESET**: Resetting Unwanted Requests to {default_unwanted_requests}")
         print(f"--- [CONTROL] Unwanted Requests are Reset ---")
 
     elif command == '.clearc':
@@ -377,6 +378,15 @@ async def control_handler(event):
         else:
             await event.edit("⚠️ Usage: `.trackcafe <kk11/kk5>` or `.trackcafe None`")
 
+    elif command == '.addprofit':
+        if args.isdigit():
+            session_total_delivery += 1
+            session_total_profit += int(args)
+            await event.edit(f"💰 **ADDED PROFIT**: RM{args} added to session profit")
+            print(f"--- [CONTROL] Added RM{args} to profit ---")
+        else:
+            await event.edit("⚠️ Usage: .addprofit <integer>")
+
     elif command == '.help':
         await event.edit(
 """.help : Display all available commands
@@ -396,7 +406,8 @@ async def control_handler(event):
 .track <keyword> : Track a specific keyword 
 .avoid <keyword> : Avoid specific keyword(s)
 .setprice <price> : Change the PM message
-.trackcafe <cafe> : Manually set allowed cafe(s)""")
+.trackcafe <cafe> : Manually set allowed cafe(s)
+.addprice <integer> : Add session profit manually""")
         print(" --- [CONTROL] Display all available commands ---")
 
 
